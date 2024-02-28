@@ -1,0 +1,215 @@
+/*rodar isso antes*/
+
+insert INTO public.pedido(
+	codpedido, codcliente, datapedido, nf, valortotal)
+	VALUES (7, 7, TO_DATE('05/07/2022', 'DD/MM/YYYY') , 00007, 100.5);
+
+alter table log
+alter column codlog set default
+nextval('LOG_SEQ');
+
+/*1) Crie um log para cada compra*/
+
+create or replace function log_prod()
+returns trigger as
+$$
+Begin 
+    INSERT INTO public.log(data, descricao) 
+	VALUES (new.data, (select pr.descricao 
+	from produto pr
+	join requisicao_compra r on pr.codproduto = r.codproduto
+	where  pr.codproduto = new.codproduto));
+return new;	
+end;
+$$ language 'plpgsql';
+    
+create trigger trig_log_prod
+after insert on requisicao_compra
+for each row execute procedure log_prod();
+
+INSERT INTO public.requisicao_compra(
+	codrequisicaocompra, codproduto, data, quantidade)
+	VALUES (1, 3, TO_DATE('05/07/2022', 'DD/MM/YYYY'), 2);
+
+INSERT INTO public.requisicao_compra(
+	codrequisicaocompra, codproduto, data, quantidade)
+	VALUES (2, 4, TO_DATE('07/07/2022', 'DD/MM/YYYY'), 1);
+	
+/*2) Criar função que verifique se a data de nascimento inserida na tabela cliente é menor que a data atual*/
+
+create or replace function data_atual()
+returns trigger as
+$$ begin
+if (select new.datanascimento from cliente c order by c.datanascimento desc limit 1 ) > CURRENT_DATE
+then return NULL;
+else
+return new;
+end if;
+end;
+$$ language 'plpgsql';
+
+create trigger data_cliente
+before insert on cliente
+for each row execute procedure data_atual();
+
+
+INSERT INTO public.cliente(codcliente, nome, datanascimento, cpf)
+	VALUES (11, 'sergio antonio', TO_DATE('12/12/2024', 'DD/MM/YYYY'), 12187212);
+	
+INSERT INTO public.cliente(codcliente, nome, datanascimento, cpf)
+	VALUES (11, 'sergio antonio', TO_DATE('12/12/2002', 'DD/MM/YYYY'), 12187212);
+	
+select * from cliente
+
+/*3) Crie uma tabela de log da tabela cliente e implemente uma função que a atualiza automaticamente*/
+
+create table log_cliente(
+	operacao varchar,
+	id int primary key not null,
+	id_old int,
+	id_new int,
+ 	nome_old varchar(60),
+	nome_new varchar(60),
+	nascimento_old date,
+	nascimento_new date,
+	cpf_old varchar(11),
+	cpf_new varchar(11)
+);
+alter table log_cliente
+alter column id set default
+nextval('LOG_SEQ');
+
+
+create or replace function auto_log_cliente()
+returns trigger as 
+$$
+begin
+
+if TG_OP = 'INSERT'
+then INSERT INTO public.log_cliente(
+	operacao,id_new,nome_new,nascimento_new, cpf_new)
+	VALUES (TG_OP , new.codcliente , new.nome , new.datanascimento , new.cpf );
+	return new;
+	
+elsif TG_OP = 'UPDATE'
+then INSERT INTO public.log_cliente(
+	operacao,id_old, id_new, nome_old, nome_new, nascimento_old, nascimento_new, cpf_old, cpf_new)
+	VALUES ( TG_OP , old.codcliente , new.codcliente , old.nome , new.nome , old.datanascimento , new.datanascimento , old.cpf , new.cpf );
+	return new;
+	
+elsif TG_OP = 'DELETE'
+then INSERT INTO public.log_cliente(
+	operacao,id_old,nome_old,nascimento_old,cpf_old)
+	VALUES ( TG_OP , old.codcliente , old.nome , old.datanascimento , old.cpf);
+	return new;
+	end if;
+end;
+$$ language 'plpgsql';
+
+create trigger trig_log_cliente
+after insert or update or delete on cliente
+for each row execute procedure auto_log_cliente();
+
+INSERT INTO cliente (codcliente, nome, datanascimento, cpf) VALUES (8 , 'Jose Augusto Carlos', '1997-02-23', '02010863942');
+INSERT INTO cliente (codcliente, nome, datanascimento, cpf) VALUES (9 , 'Carlos Augusto Jose', '1996-01-22', '02416763948');
+INSERT INTO cliente (codcliente, nome, datanascimento, cpf) VALUES (10 , 'Augusto Jose Carlos', '1995-01-21', '91038464829');
+
+update cliente set nome = 'Carlos Augusto Carlos' where codcliente = 9;
+update cliente set cpf = '12345678901' where codcliente = 9;
+update cliente set nome = 'Augusto Augusto Carlos' where codcliente = 8;
+update cliente set datanascimento = '1997-01-22' where codcliente = 8;
+delete from cliente where codcliente = 10;
+
+
+/*4) Crie uma função que conte a quantidade de pedidos unicos realizados*/
+
+create or replace function qtd_total()
+returns int as
+$$
+begin
+return (select count(distinct codpedido) from itempedido);
+end;
+$$ language 'plpgsql'
+
+select qtd_total()
+
+drop function qtd_total()
+
+/*5*/
+
+create or replace function desconto10()
+returns table( valordesconto decimal(10,2), 
+			   cod int ) as
+$$
+begin
+return query (select (valortotal - valortotal * 0.1), codpedido  from pedido where datapedido > TO_DATE('01/10/2022', 'DD/MM/YYYY')) ;
+
+end;											  
+$$ language 'plpgsql'
+
+INSERT INTO public.pedido(codpedido, codcliente, datapedido, nf, valortotal)VALUES (7, 7, '2022-10-02', 00007, 50.0);
+INSERT INTO public.pedido(codpedido, codcliente, datapedido, nf, valortotal)VALUES (8, 7, '2022-11-02', 00008, 101.50);
+INSERT INTO public.pedido(codpedido, codcliente, datapedido, nf, valortotal)VALUES (9, 9, '2022-11-05', 00009, 70.50);
+
+select * from desconto10()
+
+
+/*6*/
+
+create or replace function qtd_real(prod_id int )
+returns int as
+$$
+declare subtracao int;
+begin
+select p.quantidade - (select sum(it.quantidade) from itempedido it where it.codproduto = p.codproduto )
+into prod_id
+from produto p
+where p.codproduto = prod_id;
+return prod_id;
+
+end;
+$$ language 'plpgsql'
+
+select * from qtd_real(5)
+
+
+/*7*/
+
+create or replace view ultimo_pedido as
+select distinct on (pedido.codcliente) pedido.datapedido, pedido.codpedido, pedido.codcliente, pedido.nf, pedido.valortotal 
+from pedido 
+order by pedido.codcliente, pedido.datapedido desc;
+
+select * from ultimo_pedido
+
+/*8*/
+
+create or replace view mais_pedido as
+select distinct on (pedido.codcliente) it.codproduto, pedido.codcliente
+from pedido 
+join itempedido it on it.codpedido = pedido.codpedido 
+order by pedido.codcliente, it.quantidade desc;
+
+INSERT INTO public.itempedido(codpedido, numeroitem, valorunitario, quantidade, codproduto) VALUES (7, 3, 778.4, 2, 3);
+
+select * from mais_pedido
+
+
+/*9 cliente > pedido > itempedido > produto*/
+
+create or replace view cliente_novo as
+select  pr.codproduto, pr.descricao, c.nome
+from produto pr
+join itempedido it on it.codproduto = pr.codproduto
+join pedido p on p.codpedido = it.codpedido
+join cliente c on c.codcliente = p.codcliente
+where (select distinct on (c.datanascimento) c.datanascimento from cliente c order by c.datanascimento desc limit 1) = c.datanascimento;
+
+	
+INSERT INTO public.pedido(codpedido, codcliente, datapedido, nf, valortotal)VALUES (10, 8, '2022-11-06', '00010', 27.4 );
+
+INSERT INTO public.itempedido(codpedido, numeroitem, valorunitario, quantidade, codproduto)VALUES (10, 1, 20.4, 1, 4);
+INSERT INTO public.itempedido(codpedido, numeroitem, valorunitario, quantidade, codproduto)VALUES (10, 2, 7, 1, 1);
+		
+select * from cliente_novo;
+
